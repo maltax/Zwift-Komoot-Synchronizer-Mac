@@ -1,10 +1,8 @@
 # Zwift → Komoot sync (macOS)
 
-Personal CLI for **macOS** that makes it easier to sync Zwift rides to Komoot: FIT upload, `ZWIFT -` titles, and matching screenshots staged for manual photo add.
+Personal CLI for **macOS** that makes it easier to sync Zwift rides to Komoot: FIT upload, `ZWIFT - titles`, and matching screenshots staged for manual photo add.
 
-Built and tested on Mac only (Zwift’s default folders under `~/Documents`, `~/Pictures`, plus Finder helpers). It is not aimed at Windows or Linux.
-
-Optimization ideas, fixes, and small improvements are welcome — open a pull request.
+Built and tested on Mac only (Zwift’s default folders under `~/Documents`, `~/Pictures`). It is not aimed at Windows or Linux.
 
 ## How it works
 
@@ -15,9 +13,9 @@ Optimization ideas, fixes, and small improvements are welcome — open a pull re
 5. Copies matched photos into `data/pending_photos/<tour_id>/` — Komoot’s API can’t upload images
 6. Tracks what’s already synced in SQLite
 
-Screenshots on the Zwift activity page are the same files already on disk. No scraping needed.
+FYI: Screenshots on the Zwift activity page are the same files already on disk. No scraping needed.
 
-Paths are resolved from your home directory (`Path.home()`), so another Mac works the same way after you create your own `.env`.
+Paths are resolved from your home directory (`Path.home()`).
 
 ## Setup
 
@@ -72,14 +70,14 @@ Optional overrides if your Zwift folders live elsewhere: `ZWIFT_ACTIVITIES_DIR`,
 
 | Zwift name (logs) | Komoot title |
 |-------------------|--------------|
-| `Zwift - Your First Workout` | `ZWIFT - Your First Workout` |
-| `Zwift - Tempus Fugit in Watopia` | `ZWIFT - Tempus Fugit in Watopia` |
+| `Your First Workout` | `ZWIFT - Your First Workout` |
+| `Tempus Fugit in Watopia` | `ZWIFT - Tempus Fugit in Watopia` |
 
 ## Limitations
 
 - macOS only
 - Komoot’s API is unofficial and can change without notice
-- Photo upload isn’t available via API (read-only). Matched files land in `data/pending_photos/<tour_id>/`; add them on the tour page yourself
+- Photo upload isn’t available via API for now (read-only). Matched files land in `data/pending_photos/<tour_id>/`. Add them on the tour page yourself using the build-in helpers.
 - Zwift tracks use virtual-world GPS, same as a manual FIT import
 
 ## Contributing
@@ -100,3 +98,7 @@ src/zwift_komoot_sync/
 data/sync.db              # created on first sync (gitignored)
 data/pending_photos/      # staged photos for manual upload (gitignored)
 ```
+
+Example output on komoot : 
+<img width="1123" height="866" alt="komoot-sync-example" src="https://github.com/user-attachments/assets/64b4cecc-c43e-47ac-90aa-8e8b0a2efbe2" />
+
