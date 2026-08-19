@@ -102,6 +102,9 @@ def sync_cmd(
     limit: Optional[int] = typer.Option(
         None, "--limit", min=1, help="Max number of rides to process"
     ),
+    open_photos: bool = typer.Option(
+        False, "--open", help="Open staged photo folders in Finder after sync (macOS)"
+    ),
 ) -> None:
     """Upload new Zwift rides to Komoot."""
     settings = _load_settings(require_komoot=not dry_run)
@@ -236,22 +239,53 @@ def sync_cmd(
     if any(r.status == "failed" for r in results):
         raise typer.Exit(code=2)
 
+    if open_photos and not dry_run:
+        import subprocess
+
+        from .sync import list_pending_photo_folders
+
+        to_open = list_pending_photo_folders(settings)
+        if not to_open:
+            console.print("[dim]No pending photo folders to open.[/dim]")
+        else:
+            for item in to_open:
+                console.print(f"[cyan]Opening[/cyan] {item.photos_dir}")
+                subprocess.run(["open", item.photos_dir], check=False)
+
 
 @app.command("stage-photos")
 def stage_photos_cmd(
     open_folder: bool = typer.Option(
-        False, "--open", help="Open the photo folder in Finder (macOS)"
+        False, "--open", help="Open pending photo folders in Finder (macOS)"
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Rebuild staging folders even for rides already marked done",
     ),
 ) -> None:
-    """Stage photo folders for rides already synced."""
+    """Create missing staging folders, or open existing pending ones."""
     import subprocess
 
     settings = _load_settings(require_komoot=False)
-    from .sync import stage_photos_for_synced
+    from .sync import list_pending_photo_folders, stage_photos_for_synced
 
-    results = stage_photos_for_synced(settings)
-    if not results:
-        console.print("[dim]No synced rides with photos to stage.[/dim]")
+    if open_folder:
+        pending = list_pending_photo_folders(settings)
+        if not pending:
+            stage_photos_for_synced(settings, force=force)
+            pending = list_pending_photo_folders(settings)
+        if not pending:
+            console.print("[dim]No pending photo folders to open.[/dim]")
+            return
+        for item in pending:
+            console.print(f"[cyan]Opening[/cyan] {item.photos_dir}  →  {item.tour_url}")
+            subprocess.run(["open", item.photos_dir], check=False)
+        return
+
+    created = stage_photos_for_synced(settings, force=force)
+    if not created:
+        console.print("[dim]No missing staging folders to create.[/dim]")
         return
 
     table = Table(title="Staged photos")
@@ -259,7 +293,7 @@ def stage_photos_cmd(
     table.add_column("Tour")
     table.add_column("Photos")
     table.add_column("Folder")
-    for item in results:
+    for item in created:
         table.add_row(
             item.filename,
             str(item.tour_id or "—"),
@@ -269,11 +303,6 @@ def stage_photos_cmd(
         if item.tour_url:
             console.print(f"  → {item.tour_url}")
     console.print(table)
-
-    if open_folder:
-        for item in results:
-            if item.photos_dir:
-                subprocess.run(["open", item.photos_dir], check=False)
 
 
 @app.command("clean-photos")
@@ -319,9 +348,18 @@ def clean_photos_cmd(
         console.print("[cyan]Dry-run — nothing deleted.[/cyan]")
         return
 
+    cleaned_ids: list[int] = []
     for path in targets:
+        try:
+            cleaned_ids.append(int(path.name))
+        except ValueError:
+            pass
         shutil.rmtree(path)
         console.print(f"[green]Deleted[/green] {path}")
+
+    db = SyncDatabase(settings.db_path)
+    marked = db.mark_photos_done(cleaned_ids)
+    db.close()
 
     try:
         if root.exists() and not any(root.iterdir()):
@@ -329,7 +367,10 @@ def clean_photos_cmd(
     except OSError:
         pass
 
-    console.print(f"[green]Done.[/green] Removed {len(targets)} folder(s).")
+    console.print(
+        f"[green]Done.[/green] Removed {len(targets)} folder(s)"
+        + (f", marked {marked} ride(s) as photos done." if marked else ".")
+    )
 
 
 @app.command("doctor")

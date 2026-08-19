@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import Settings
-from .db import SyncDatabase
+from .db import PHOTOS_DONE, PHOTOS_NONE, PHOTOS_PENDING, SyncDatabase
 from .fit_scanner import FitActivity, scan_activities
 from .komoot_client import KomootClient, KomootError, sport_from_fit, tour_url
 from .photos import MatchedPhoto, assign_photos_exclusively, stage_photos
@@ -184,15 +184,24 @@ def _sync_one(
         url = tour_url(upload.tour_id)
         staged_count = 0
         staged_dir: Path | None = None
-        if item.photos:
+        previous = db.get(item.fit.filename)
+        already_done = previous is not None and previous.photos_status == PHOTOS_DONE
+        photos_status = PHOTOS_NONE
+
+        # Stage photos only for this ride; never rebuild tours already cleaned.
+        if item.photos and not already_done:
             staged_dir = stage_photos(
                 item.photos,
                 tour_id=upload.tour_id,
                 staging_root=settings.photos_staging_dir,
                 tour_url=url,
                 title=item.title,
+                recreate=True,
             )
             staged_count = len(item.photos)
+            photos_status = PHOTOS_PENDING
+        elif already_done:
+            photos_status = PHOTOS_DONE
 
         msg_parts = []
         if upload.created:
@@ -203,6 +212,8 @@ def _sync_one(
             msg_parts.append(
                 f"{staged_count} photo(s) staged — add them manually on Komoot"
             )
+        elif item.photos and already_done:
+            msg_parts.append("photos already cleaned — skipped staging")
         if item.zwift_activity_id:
             msg_parts.append(f"zwift:{item.zwift_activity_id}")
         msg_parts.append(url)
@@ -212,8 +223,13 @@ def _sync_one(
             fit_sha256=item.fit.sha256,
             title=item.title,
             komoot_tour_id=upload.tour_id,
-            photos_uploaded=staged_count,
+            photos_uploaded=(
+                staged_count
+                if staged_count
+                else (previous.photos_uploaded if previous else 0)
+            ),
             status="synced",
+            photos_status=photos_status,
         )
         return SyncItemResult(
             filename=item.fit.filename,
@@ -245,25 +261,90 @@ def _sync_one(
         )
 
 
-def stage_photos_for_synced(settings: Settings) -> list[SyncItemResult]:
-    """Re-stage photo folders for rides already synced."""
+def _repair_photos_status_from_folders(db: SyncDatabase, settings: Settings) -> int:
+    """If a staging folder still exists, the ride cannot be done (clean removes it)."""
+    repaired = 0
+    for record in db.list_all():
+        if not record.komoot_tour_id or record.photos_uploaded <= 0:
+            continue
+        if record.photos_status != PHOTOS_DONE:
+            continue
+        folder = settings.photos_staging_dir / str(record.komoot_tour_id)
+        if not folder.is_dir():
+            continue
+        db.upsert(
+            fit_filename=record.fit_filename,
+            fit_sha256=record.fit_sha256,
+            title=record.title,
+            komoot_tour_id=record.komoot_tour_id,
+            photos_uploaded=record.photos_uploaded,
+            status=record.status,
+            photos_status=PHOTOS_PENDING,
+        )
+        repaired += 1
+    return repaired
+
+
+def list_pending_photo_folders(settings: Settings) -> list[SyncItemResult]:
+    """Return synced rides with photos_status=pending and an existing staging folder."""
+    db = SyncDatabase(settings.db_path)
+    _repair_photos_status_from_folders(db, settings)
+    results: list[SyncItemResult] = []
+    for record in db.list_all():
+        if record.photos_status != PHOTOS_PENDING or not record.komoot_tour_id:
+            continue
+        dest = settings.photos_staging_dir / str(record.komoot_tour_id)
+        if not dest.is_dir():
+            continue
+        results.append(
+            SyncItemResult(
+                filename=record.fit_filename,
+                title=record.title,
+                status="pending",
+                tour_id=record.komoot_tour_id,
+                photos_matched=record.photos_uploaded,
+                photos_staged=record.photos_uploaded,
+                photos_dir=str(dest),
+                tour_url=tour_url(record.komoot_tour_id),
+            )
+        )
+    db.close()
+    return results
+
+
+def stage_photos_for_synced(
+    settings: Settings,
+    *,
+    force: bool = False,
+) -> list[SyncItemResult]:
+    """
+    Create missing staging folders for rides marked photos_status=pending.
+
+    Skips rides already marked done (clean-photos). Use force=True to restage
+    done or historical rides.
+    """
     db = SyncDatabase(settings.db_path)
     prepared = prepare_activities(settings, db)
     results: list[SyncItemResult] = []
     for item in prepared:
         if not item.already_synced or not item.previous_tour_id:
             continue
+        record = db.get(item.fit.filename)
+        photos_status = record.photos_status if record else PHOTOS_NONE
+
         if not item.photos:
-            results.append(
-                SyncItemResult(
-                    filename=item.fit.filename,
-                    title=item.title,
-                    status="skipped",
-                    tour_id=item.previous_tour_id,
-                    message="No photos to stage",
-                )
-            )
             continue
+
+        if photos_status == PHOTOS_DONE and not force:
+            continue
+
+        dest_path = settings.photos_staging_dir / str(item.previous_tour_id)
+        if dest_path.exists() and not force:
+            continue
+
+        if photos_status == PHOTOS_NONE and not force:
+            continue
+
         url = tour_url(item.previous_tour_id)
         dest = stage_photos(
             item.photos,
@@ -271,6 +352,16 @@ def stage_photos_for_synced(settings: Settings) -> list[SyncItemResult]:
             staging_root=settings.photos_staging_dir,
             tour_url=url,
             title=item.title,
+            recreate=True,
+        )
+        db.upsert(
+            fit_filename=item.fit.filename,
+            fit_sha256=item.fit.sha256,
+            title=item.title,
+            komoot_tour_id=item.previous_tour_id,
+            photos_uploaded=len(item.photos),
+            status="synced",
+            photos_status=PHOTOS_PENDING,
         )
         results.append(
             SyncItemResult(
@@ -280,7 +371,7 @@ def stage_photos_for_synced(settings: Settings) -> list[SyncItemResult]:
                 tour_id=item.previous_tour_id,
                 photos_matched=len(item.photos),
                 photos_staged=len(item.photos),
-                photos_dir=str(dest),
+                photos_dir=str(dest) if dest else None,
                 tour_url=url,
                 message=f"{len(item.photos)} photo(s) → {dest}",
             )
