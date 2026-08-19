@@ -38,16 +38,19 @@ zwift-komoot status
 
 zwift-komoot sync --dry-run  # no upload
 zwift-komoot sync
+zwift-komoot sync --open           # open pending photo folders after sync
 zwift-komoot sync --limit 1
 zwift-komoot sync --force
 
-zwift-komoot stage-photos
-zwift-komoot stage-photos --open   # opens Finder
+zwift-komoot stage-photos          # create missing pending folders only
+zwift-komoot stage-photos --open   # open all pending folders in Finder
 
-zwift-komoot clean-photos              # after you’ve added photos on Komoot
+zwift-komoot clean-photos              # marks rides as done — only step that does
 zwift-komoot clean-photos --tour-id 123
 zwift-komoot clean-photos --dry-run
 ```
+
+After `sync`, rides with photos are `pending` until you run `clean-photos` (which marks them `done`).
 
 If the `zwift-komoot` script isn’t on your PATH:
 

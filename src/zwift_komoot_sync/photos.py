@@ -82,9 +82,16 @@ def stage_photos(
     staging_root: Path,
     tour_url: str,
     title: str,
-) -> Path:
-    """Copy matched photos into data/pending_photos/<tour_id>/ for manual Komoot upload."""
+    recreate: bool = True,
+) -> Path | None:
+    """
+    Copy matched photos into data/pending_photos/<tour_id>/ for manual Komoot upload.
+
+    If recreate is False and the folder already exists, leave it untouched.
+    """
     dest = staging_root / str(tour_id)
+    if dest.exists() and not recreate:
+        return dest
     if dest.exists():
         shutil.rmtree(dest)
     dest.mkdir(parents=True, exist_ok=True)
